@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon P2P Chat with Cursor Tracking</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=Roboto:wght@300;400;500&display=swap');
+        
+        body {
+            font-family: 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #e2e8f0;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        
+        .neon-text {
+            text-shadow: 0 0 5px #00f7ff, 0 0 10px #00f7ff;
+        }
+        
+        .neon-border {
+            box-shadow: 0 0 10px rgba(0, 247, 255, 0.5), 
+                        inset 0 0 10px rgba(0, 247, 255, 0.3);
+            border: 1px solid rgba(0, 247, 255, 0.3);
+        }
+        
+        .neon-button {
+            transition: all 0.3s ease;
+            box-shadow: 0 0 8px rgba(0, 247, 255, 0.5);
+        }
+        
+        .neon-button:hover {
+            box-shadow: 0 0 15px rgba(0, 247, 255, 0.8);
+            transform: translateY(-2px);
+        }
+        
+        .neon-button:active {
+            transform: translateY(0);
+        }
+        
+        #remoteCursor {
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            background: rgba(0, 247, 255, 0.7);
+            border-radius: 50%;
+            pointer-events: none;
+            display: none;
+            z-index: 1000;
+            transform: translate(-50%, -50%);
+            mix-blend-mode: screen;
+        }
+        
+        #localCursor {
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            background: rgba(255, 0, 234, 0.7);
+            border-radius: 50%;
+            pointer-events: none;
+            display: none;
+            z-index: 1000;
+            transform: translate(-50%, -50%);
+            mix-blend-mode: screen;
+        }
+        
+        .message-animation {
+            animation: messagePop 0.3s ease-out;
+        }
+        
+        @keyframes messagePop {
+            0% { transform: scale(0.9); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        
+        .typing-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #00f7ff;
+            margin-right: 4px;
+            animation: typing 1.4s infinite ease-in-out;
+        }
+        
+        .typing-indicator:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+        
+        .typing-indicator:nth-child(3) {
+            animation-delay: 0.4s;
+            margin-right: 0;
+        }
+        
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-5px); }
+        }
+        
+        .connection-status {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        
+        .connected {
+            background-color: #00ff7f;
+            box-shadow: 0 0 5px #00ff7f;
+        }
+        
+        .disconnected {
+            background-color: #ff5555;
+            box-shadow: 0 0 5px #ff5555;
+        }
+        
+        .connecting {
+            background-color: #ffaa00;
+            box-shadow: 0 0 5px #ffaa00;
+            animation: pulse 1.5s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        #messages::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        #messages::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 3px;
+        }
+        
+        #messages::-webkit-scrollbar-thumb {
+            background: rgba(0, 247, 255, 0.5);
+            border-radius: 3px;
+        }
+        
+        #messages::-webkit-scrollbar-thumb:hover {
+            background: rgba(0, 247, 255, 0.7);
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center p-4">
+    <div id="remoteCursor"></div>
+    <div id="localCursor"></div>
+    
+    <div class="w-full max-w-2xl bg-gray-900/80 backdrop-blur-sm rounded-xl p-6 neon-border">
+        <div class="flex justify-between items-center mb-6">
+            <h1 class="text-2xl font-bold neon-text font-orbitron">
+                <i class="fas fa-comment-dots mr-2"></i>Neon P2P Chat
+            </h1>
+            <div id="connectionStatus" class="flex items-center">
+                <span class="connection-status disconnected"></span>
+                <span class="text-sm">Disconnected</span>
+            </div>
+        </div>
+        
+        <div class="mb-6">
+            <div class="flex items-center mb-2">
+                <span class="text-sm text-gray-400 mr-2">Your ID:</span>
+                <div class="flex-1 bg-gray-800 rounded-lg px-3 py-2 text-sm font-mono flex items-center justify-between">
+                    <span id="peerId" class="truncate">Generating ID...</span>
+                    <button onclick="copyToClipboard()" class="ml-2 text-xs bg-gray-700 hover:bg-gray-600 rounded px-2 py-1 transition">
+                        <i class="fas fa-copy mr-1"></i>Copy
+                    </button>
+                </div>
+            </div>
+            
+            <div class="flex items-center">
+                <span class="text-sm text-gray-400 mr-2">Friend's ID:</span>
+                <div class="flex-1 flex">
+                    <input type="text" id="remotePeerId" placeholder="Enter peer ID" 
+                           class="flex-1 bg-gray-800 rounded-l-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-cyan-400">
+                    <button onclick="connectToPeer()" class="bg-cyan-600 hover:bg-cyan-500 rounded-r-lg px-4 py-2 text-sm font-medium neon-button">
+                        <i class="fas fa-plug mr-1"></i>Connect
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div id="messages" class="h-64 bg-gray-800/50 rounded-lg p-4 mb-4 overflow-y-auto flex flex-col space-y-3"></div>
+        
+        <div class="flex items-center space-x-2">
+            <input type="text" id="messageInput" placeholder="Type your message..." 
+                   class="flex-1 bg-gray-800 rounded-lg px-4 py-2 focus:outline-none focus:ring-1 focus:ring-cyan-400">
+            <button onclick="sendMessage()" class="bg-cyan-600 hover:bg-cyan-500 rounded-lg px-4 py-2 font-medium neon-button">
+                <i class="fas fa-paper-plane mr-1"></i>Send
+            </button>
+        </div>
+        
+        <div id="typingIndicator" class="mt-2 text-sm text-gray-400 hidden">
+            <div class="flex items-center">
+                <div class="typing-indicator"></div>
+                <div class="typing-indicator"></div>
+                <div class="typing-indicator"></div>
+                <span class="ml-2">Friend is typing...</span>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let peer = null;
+        let conn = null;
+        let myId = null;
+        let isTyping = false;
+        let typingTimeout = null;
+        const remoteCursor = document.getElementById('remoteCursor');
+        const localCursor = document.getElementById('localCursor');
+        const typingIndicator = document.getElementById('typingIndicator');
+        const connectionStatus = document.getElementById('connectionStatus');
+        
+        function updateConnectionStatus(status) {
+            const statusElement = connectionStatus.querySelector('.connection-status');
+            const textElement = connectionStatus.querySelector('span:last-child');
+            
+            statusElement.className = 'connection-status';
+            switch(status) {
+                case 'connected':
+                    statusElement.classList.add('connected');
+                    textElement.textContent = 'Connected';
+                    break;
+                case 'disconnected':
+                    statusElement.classList.add('disconnected');
+                    textElement.textContent = 'Disconnected';
+                    break;
+                case 'connecting':
+                    statusElement.classList.add('connecting');
+                    textElement.textContent = 'Connecting...';
+                    break;
+            }
+        }
+
+        function initialize() {
+            document.getElementById('remotePeerId').value = '';
+            updateConnectionStatus('disconnected');
+            
+            peer = new Peer({
+                host: '0.peerjs.com',
+                port: 443,
+                path: '/',
+                pingInterval: 5000,
+                debug: 2
+            });
+            
+            peer.on('open', (id) => {
+                myId = id;
+                document.getElementById('peerId').textContent = id;
+            });
+            
+            peer.on('connection', (connection) => {
+                if (conn && conn.open) {
+                    connection.close();
+                    showSystemMessage('Connection attempt rejected (already connected)');
+                    return;
+                }
+                
+                updateConnectionStatus('connecting');
+                conn = connection;
+                setupConnection();
+            });
+            
+            peer.on('error', (err) => {
+                console.error('PeerJS error:', err);
+                showSystemMessage('Connection error: ' + err.message);
+                updateConnectionStatus('disconnected');
+            });
+            
+            peer.on('disconnected', () => {
+                showSystemMessage('Disconnected from PeerJS server');
+                updateConnectionStatus('disconnected');
+            });
+        }
+        
+        function connectToPeer() {
+            const remoteId = document.getElementById('remotePeerId').value.trim();
+            if (!remoteId || remoteId === myId) {
+                showSystemMessage('Please enter a valid peer ID');
+                return;
+            }
+            
+            if (conn && conn.open) {
+                showSystemMessage('Already connected to a peer');
+                return;
+            }
+            
+            updateConnectionStatus('connecting');
+            conn = peer.connect(remoteId, {
+                reliable: true,
+                serialization: 'json'
+            });
+            
+            setupConnection();
+        }
+        
+        function setupConnection() {
+            conn.on('open', () => {
+                showSystemMessage('Connection established with peer!');
+                updateConnectionStatus('connected');
+                
+                document.addEventListener('pointermove', sendCursorPosition);
+                remoteCursor.style.display = 'block';
+                localCursor.style.display = 'block';
+                
+                // Set up typing detection
+                document.getElementById('messageInput').addEventListener('input', detectTyping);
+            });
+            
+            conn.on('data', (data) => {
+                if (data.type === 'message') {
+                    showMessage(`Friend: ${data.text}`);
+                } else if (data.type === 'cursor') {
+                    updateRemoteCursor(data.x, data.y);
+                } else if (data.type === 'typing') {
+                    if (data.status) {
+                        typingIndicator.classList.remove('hidden');
+                    } else {
+                        typingIndicator.classList.add('hidden');
+                    }
+                }
+            });
+            
+            conn.on('close', () => {
+                showSystemMessage('Connection closed');
+                updateConnectionStatus('disconnected');
+                document.removeEventListener('pointermove', sendCursorPosition);
+                document.getElementById('messageInput').removeEventListener('input', detectTyping);
+                remoteCursor.style.display = 'none';
+                typingIndicator.classList.add('hidden');
+            });
+            
+            conn.on('error', (err) => {
+                console.error('Connection error:', err);
+                showSystemMessage('Connection error: ' + err.message);
+                updateConnectionStatus('disconnected');
+            });
+        }
+        
+        function detectTyping() {
+            if (!isTyping) {
+                isTyping = true;
+                conn.send({ type: 'typing', status: true });
+            }
+            
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                isTyping = false;
+                conn.send({ type: 'typing', status: false });
+            }, 1000);
+        }
+        
+        function copyToClipboard() {
+            const id = document.getElementById('peerId').textContent;
+            if (id === 'Generating ID...') {
+                showSystemMessage('ID not ready yet');
+                return;
+            }
+            
+            navigator.clipboard.writeText(id).then(() => {
+                showSystemMessage('ID copied to clipboard!');
+            }).catch(err => {
+                console.error('Error copying ID:', err);
+                showSystemMessage('Failed to copy ID');
+            });
+        }
+        
+        function sendCursorPosition(e) {
+            if (conn && conn.open) {
+                const x = e.clientX / window.innerWidth;
+                const y = e.clientY / window.innerHeight;
+                conn.send({
+                    type: 'cursor',
+                    x: x,
+                    y: y
+                });
+            }
+            
+            localCursor.style.top = `${e.clientY}px`;
+            localCursor.style.left = `${e.clientX}px`;
+        }
+        
+        function updateRemoteCursor(xPercent, yPercent) {
+            const x = window.innerWidth * xPercent;
+            const y = window.innerHeight * yPercent;
+            remoteCursor.style.top = `${y}px`;
+            remoteCursor.style.left = `${x}px`;
+        }
+        
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (message && conn && conn.open) {
+                conn.send({
+                    type: 'message',
+                    text: message
+                });
+                showMessage(`You: ${message}`);
+                input.value = '';
+                
+                // Send typing stopped
+                isTyping = false;
+                conn.send({ type: 'typing', status: false });
+                typingIndicator.classList.add('hidden');
+            }
+        }
+        
+        function showMessage(message) {
+            const messagesDiv = document.getElementById('messages');
+            const messageElement = document.createElement('div');
+            messageElement.textContent = message;
+            
+            if (message.startsWith('You:')) {
+                messageElement.className = 'self-end bg-cyan-900/50 rounded-l-lg rounded-br-lg px-3 py-2 max-w-xs message-animation';
+            } else if (message.startsWith('Friend:')) {
+                messageElement.className = 'self-start bg-purple-900/50 rounded-r-lg rounded-bl-lg px-3 py-2 max-w-xs message-animation';
+            } else {
+                messageElement.className = 'self-center text-center text-sm text-gray-400 italic px-3 py-1 message-animation';
+            }
+            
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        function showSystemMessage(message) {
+            const messagesDiv = document.getElementById('messages');
+            const messageElement = document.createElement('div');
+            messageElement.textContent = message;
+            messageElement.className = 'self-center text-center text-sm text-gray-400 italic px-3 py-1 message-animation';
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        // Handle Enter key for sending messages
+        document.getElementById('messageInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+        
+        // Initialize the app
+        document.addEventListener('DOMContentLoaded', initialize);
+    </script>
+</body>
+</html>
