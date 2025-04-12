@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>P2P Chat with Cursor Tracking</title>
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f0f0f0;
+        }
+        #chatContainer {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        #messages {
+            height: 300px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+            overflow-y: auto;
+            background: #fff;
+        }
+        #messageInput {
+            width: calc(100% - 90px);
+            padding: 8px;
+            margin-right: 5px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        button {
+            padding: 8px 15px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        #peerIdContainer {
+            margin-bottom: 10px;
+        }
+        #remoteCursor {
+            position: absolute;
+            width: 15px;
+            height: 15px;
+            background: rgba(0, 123, 255, 0.7);
+            border-radius: 3px;
+            pointer-events: none;
+            display: none;
+            z-index: 1000;
+            top: -10;
+            left: -10;
+        }
+        #localeCursor {
+            position: absolute;
+            width: 15px;
+            height: 15px;
+            background: rgba(255, 123, 0, 0.7);
+            border-radius: 3px;
+            pointer-events: none;
+            display: none;
+            z-index: 1000;
+            top: -10;
+            left: -10;
+        }
+    </style>
+</head>
+<body>
+    <div id="chatContainer">
+        <div id="peerIdContainer">
+            Your ID: <span id="peerId">... not created ...</span>
+            <button onclick="copyToClipboard()">Copy ID</button>
+        </div>
+        <div id="messages"></div>
+        <div>
+            <input type="text" id="messageInput" placeholder="Type message...">
+            <button onclick="sendMessage()">Send</button>
+        </div>
+        <div>
+            <input type="text" id="remotePeerId" placeholder="Friend's ID">
+            <button onclick="connectToPeer()">Connect</button>
+        </div>
+    </div>
+    <div id="remoteCursor"></div>
+    <div id="localeCursor"></div>
+
+    <script>
+        let peer = null;
+        let conn = null;
+        let myId = null;
+        const remoteCursor = document.getElementById('remoteCursor');
+        const localeCursor = document.getElementById('localeCursor');
+
+        function initialize() {
+            document.getElementById('remotePeerId').value = '';
+
+            peer = new Peer({
+                host: '0.peerjs.com',
+                port: 443,
+                path: '/',
+                pingInterval: 5000
+            });
+
+            peer.on('open', (id) => {
+                myId = id;
+                document.getElementById('peerId').textContent = id;
+            });
+
+            peer.on('connection', (connection) => {
+                if (conn && conn.open) {
+                    connection.close();
+                    return;
+                }
+                conn = connection;
+                setupConnection();
+            });
+
+            peer.on('error', (err) => {
+                console.error('PeerJS error:', err);
+                showMessage('System: Connection error occurred');
+            });
+        }
+
+        function connectToPeer() {
+            const remoteId = document.getElementById('remotePeerId').value;
+            if (!remoteId || remoteId === myId) return;
+            
+            conn = peer.connect(remoteId);
+            setupConnection();
+        }
+
+        function setupConnection() {
+            conn.on('open', () => {
+                showMessage('System: Connection established!');
+                document.addEventListener('pointermove', sendCursorPosition);
+                remoteCursor.style.display = 'block';
+                localeCursor.style.display = 'block';
+            });
+
+            conn.on('data', (data) => {
+                if (data.type === 'message') {
+                    showMessage(`Friend: ${data.text}`);
+                } else if (data.type === 'cursor') {
+                    updateRemoteCursor(data.x, data.y);
+                }
+            });
+
+            conn.on('close', () => {
+                showMessage('System: Connection closed');
+                document.removeEventListener('pointermove', sendCursorPosition);
+                remoteCursor.style.display = 'none';
+            });
+
+            conn.on('error', (err) => {
+                console.error('Connection error:', err);
+                showMessage('System: Connection error occurred');
+            });
+        }
+
+function copyToClipboard() {
+    const id = document.getElementById('peerId').textContent;
+    navigator.clipboard.writeText(id).then(() => {
+        showMessage('System: ID copied to clipboard!');
+    }).catch(err => {
+        console.error('Error copying ID:', err);
+        showMessage('System: Failed to copy ID');
+    });
+}
+
+        function sendCursorPosition(e) {
+            if (conn && conn.open) {
+                const x = 1.0 / window.innerWidth * e.clientX;
+                const y = 1.0 / window.innerHeight * e.clientY;
+                conn.send({
+                    type: 'cursor',
+                    x: x,
+                    y: y
+                });
+            }
+            localeCursor.style.top = `${e.clientY}px`;
+            localeCursor.style.left = `${e.clientX}px`;
+        }
+
+        function updateRemoteCursor(xPercent, yPercent) {
+            const x = window.innerWidth * xPercent;
+            const y = window.innerHeight * yPercent;
+            //remoteCursor.style.transform = `translate(${x}px, ${y}px)`;
+            remoteCursor.style.top = `${y}px`;
+            remoteCursor.style.left = `${x}px`;
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (message && conn && conn.open) {
+                conn.send({
+                    type: 'message',
+                    text: message
+                });
+                showMessage(`You: ${message}`);
+                input.value = '';
+                input.focus();
+            }
+        }
+
+        function showMessage(message) {
+            const messagesDiv = document.getElementById('messages');
+            const messageElement = document.createElement('div');
+            messageElement.textContent = message;
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Handle Enter key for sending messages
+        document.getElementById('messageInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // Initialize the app
+        initialize();
+    </script>
+</body>
+</html>
