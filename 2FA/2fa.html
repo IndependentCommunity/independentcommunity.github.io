@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TOTP Генератор</title>
+<style>
+   body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f5f5f5; }
+   .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+   h1 { color: #333; text-align: center; margin-bottom: 30px; }
+   .form-group { margin-bottom: 20px; }
+   label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
+   input[type="text"] { width: 100%; padding: 10px; border: 2px solid #ddd; border-radius: 5px; font-size: 16px; box-sizing: border-box; }
+   input[type="text"]:focus { border-color: #4CAF50; outline: none; }
+   .code-display { text-align: center; margin: 30px 0; }
+   .code { font-size: 3em; font-weight: bold; color: #4CAF50; letter-spacing: 5px; font-family: 'Courier New', monospace; }
+   .timer { color: #666; font-size: 1.2em; margin-top: 10px; }
+   .info { background: #f0f8ff; padding: 15px; border-radius: 5px; margin-top: 20px; font-size: 0.9em; color: #555; }
+   .copy-btn { background: #4CAF50; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; margin-top: 10px; }
+   .copy-btn:hover { background: #45a049; }
+   .error { color: #f44336; font-weight: bold; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="container">
+   <h1>2FA Генератор (TOTP)</h1>
+
+   <div class="form-group">
+      <label for="secretKey">Секретный ключ (Base32):</label>
+      <input type="text" id="secretKey" placeholder="Введите ваш секретный ключ (например, JBSWY3DPEHPK3PXP)">
+      <div id="keyError" class="error"></div>
+   </div>
+
+   <div class="code-display">
+      <div class="code" id="totpCode">------</div>
+      <div class="timer" id="timer">Обновление через: 30s</div>
+      <button class="copy-btn" onclick="copyCode()">Копировать код</button>
+   </div>
+
+   <div class="info">
+      <strong>Как использовать:</strong><br>
+      1. Введите ваш секретный ключ в формате Base32<br>
+      2. Код будет автоматически обновляться каждые 30 секунд<br>
+      3. Используйте этот код для двухфакторной аутентификации
+   </div>
+</div>
+
+<script>
+   class Base32 {
+      static decode(base32) {
+         const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+         base32 = base32.replace(/=+$/, '').toUpperCase();
+
+         let bits = '';
+         for (let i = 0; i < base32.length; i++) {
+            const val = alphabet.indexOf(base32[i]);
+            if (val === -1) continue;
+            bits += val.toString(2).padStart(5, '0');
+         }
+
+         const bytes = [];
+         for (let i = 0; i + 8 <= bits.length; i += 8) {
+            bytes.push(parseInt(bits.substr(i, 8), 2));
+         }
+
+         return new Uint8Array(bytes);
+      }
+   }
+
+   async function hmacSha1(key, message) {
+      const keyBytes = typeof key === 'string' ? new TextEncoder().encode(key) : key;
+      const messageBytes = typeof message === 'string' ? new TextEncoder().encode(message) : message;
+
+      const cryptoKey = await crypto.subtle.importKey(
+         'raw',
+         keyBytes,
+         { name: 'HMAC', hash: 'SHA-1' },
+         false,
+         ['sign']
+      );
+
+      const signature = await crypto.subtle.sign('HMAC', cryptoKey, messageBytes);
+      return new Uint8Array(signature);
+   }
+
+   function dynamicTruncation(hmacResult) {
+      const offset = hmacResult[hmacResult.length - 1] & 0xf;
+      return (
+         ((hmacResult[offset] & 0x7f) << 24) |
+         ((hmacResult[offset + 1] & 0xff) << 16) |
+         ((hmacResult[offset + 2] & 0xff) << 8) |
+         (hmacResult[offset + 3] & 0xff)
+      );
+   }
+
+   async function generateTOTP(secret, timestamp = Date.now(), digits = 6, period = 30) {
+      try {
+         const keyBytes = Base32.decode(secret);
+         const timeStep = Math.floor(timestamp / 1000 / period);
+
+         const timeBuffer = new ArrayBuffer(8);
+         const timeView = new DataView(timeBuffer);
+         timeView.setUint32(4, timeStep, false);
+
+         const hmacResult = await hmacSha1(keyBytes, timeBuffer);
+         const code = dynamicTruncation(hmacResult);
+         const otp = code % Math.pow(10, digits);
+
+         return otp.toString().padStart(digits, '0');
+      } catch (error) {
+         console.error('Ошибка генерации TOTP:', error);
+         throw error;
+      }
+   }
+
+   const secretKeyInput = document.getElementById('secretKey');
+   const totpCodeElement = document.getElementById('totpCode');
+   const timerElement = document.getElementById('timer');
+   const keyErrorElement = document.getElementById('keyError');
+
+   let currentSecret = '';
+   let updateInterval;
+
+   async function updateTOTP() {
+      if (!currentSecret) {
+         totpCodeElement.textContent = '------';
+         return;
+      }
+
+      try {
+         const timestamp = Date.now();
+         const code = await generateTOTP(currentSecret, timestamp);
+         totpCodeElement.textContent = code;
+         keyErrorElement.textContent = '';
+
+         const secondsLeft = 30 - Math.floor((timestamp / 1000) % 30);
+         timerElement.textContent = `Обновление через: ${secondsLeft}s`;
+      } catch (error) {
+         totpCodeElement.textContent = 'ERROR';
+         keyErrorElement.textContent = 'Неверный формат секретного ключа';
+      }
+   }
+
+   secretKeyInput.addEventListener('input', function(e) {
+      currentSecret = e.target.value.replace(/\s/g, '');
+      updateTOTP();
+   });
+
+   async function copyCode() {
+      if (totpCodeElement.textContent !== '------') {
+         try {
+            await navigator.clipboard.writeText(totpCodeElement.textContent);
+            const originalText = document.querySelector('.copy-btn').textContent;
+            document.querySelector('.copy-btn').textContent = 'Скопировано!';
+            setTimeout(() => {
+               document.querySelector('.copy-btn').textContent = originalText;
+            }, 2000);
+         } catch (err) {
+            console.error('Ошибка копирования:', err);
+         }
+      }
+   }
+
+   function startTimer() {
+      updateTOTP();
+      updateInterval = setInterval(updateTOTP, 1000);
+   }
+
+   window.addEventListener('load', function() {
+      secretKeyInput.placeholder = 'JBSWY3DPEHPK3PXP';
+      startTimer();
+   });
+
+   window.addEventListener('beforeunload', function() {
+      if (updateInterval) {
+         clearInterval(updateInterval);
+      }
+   });
+</script>
+</body>
+</html>
